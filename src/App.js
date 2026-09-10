@@ -3,7 +3,6 @@ import './App.css';
 import { riddles } from './riddles';
 import 'react-bootstrap';
 import toast, { Toaster } from 'react-hot-toast';
-import Modal from './modal.js';
 
 
 const riddle_day = getRiddleDay();
@@ -13,7 +12,9 @@ var guesses = getGuesses();
 
 
 function App() {
-  const [guessesLeft, setGuessesLeft] = useState(true);
+  // Only the setter is used: it re-renders so showAnswer() is re-evaluated
+  // once the game ends.
+  const [, setGuessesLeft] = useState(true);
   const listItems = guesses.map((guess) =>
     <li key={guess.id}>{guess}</li>
 
@@ -26,23 +27,26 @@ function App() {
 
   const [text, setText]  = useState('');
   const handleSubmit = event => {
+    event.preventDefault();
     guesses.push(text);
     localStorage.setItem('guesses',JSON.stringify(guesses));
-    event.preventDefault();
-    noOfGuesses -= 1;
     if (Answer() === text) {
+        // A correct guess ends the game, so it does not spend one of the
+        // remaining guesses. Leaving noOfGuesses alone also keeps the number
+        // on screen matching the one already in storage.
         setGuessesLeft(false);
         toast.success("correct!!");
         localStorage.setItem("playerWon", "true");
         localStorage.setItem("gameOver", "true");
     } else {
+        noOfGuesses -= 1;
+        localStorage.setItem("noOfGuesses", noOfGuesses)
         toast.error("Incorrect!");
         if (noOfGuesses === 0) {
           setGuessesLeft(false);
           localStorage.setItem("gameOver", "true");
         }
         setText('')
-        localStorage.setItem("noOfGuesses", noOfGuesses)
     }
 
   }
@@ -51,7 +55,7 @@ function App() {
     <div className="App">
         <Toaster/>
         <div className="headings">
-        <h1 alt="title"> Riddle </h1>
+        <h1> Riddle </h1>
         </div>
         <form onSubmit={handleSubmit}>
         <div className='sub-headings'>
@@ -79,8 +83,8 @@ function App() {
         </p>}
           <h3 className='sub-headings'>Guesses Left: {noOfGuesses}</h3>
           <div>
-            
-         {listItems && <h3> Previous Guesses</h3>}
+
+         {listItems.length > 0 && <h3> Previous Guesses</h3>}
 
         <ol>
           {listItems}
@@ -93,7 +97,7 @@ function App() {
 function Riddle() {
 
   return riddles[riddle_day][0];
-} 
+}
 function Answer() {
   return riddles[riddle_day][1];
 }
@@ -107,29 +111,32 @@ function getRiddleDay() {
   const NOW_IN_MS = Date.now();
   const GAME_EPOC_MS = 1.656198e+12;
   const ONE_DAY_IN_MS = 8.64e+7;
-  const riddle_day =  Object.keys(riddles)[Math.floor((NOW_IN_MS - GAME_EPOC_MS) / ONE_DAY_IN_MS)];
-  var stored_day_str = localStorage.getItem('day');
-  var stored_day = parseInt(stored_day_str)
+  // Days elapsed since the game epoch. This keeps climbing forever, so it is
+  // what we compare against to notice that a new day has started.
+  const day_number = Math.floor((NOW_IN_MS - GAME_EPOC_MS) / ONE_DAY_IN_MS);
+  var stored_day = parseInt(localStorage.getItem('day'));
 
-  if (stored_day === null) {
-    localStorage.setItem('day',riddle_day);
-    stored_day = riddle_day;
+  if (Number.isNaN(stored_day)) {
+    localStorage.setItem('day', day_number);
+    stored_day = day_number;
   }
-  if (riddle_day > stored_day) {
-    localStorage.setItem('day',riddle_day);
+  if (day_number > stored_day) {
+    localStorage.setItem('day', day_number);
     localStorage.removeItem('guesses');
     localStorage.setItem('noOfGuesses', 5);
-    localStorage.setItem("playerWon", "false");    
+    localStorage.setItem("playerWon", "false");
     localStorage.setItem("gameOver", "false");
-    stored_day = riddle_day;
-  } 
+    stored_day = day_number;
+  }
 
-  return riddle_day;
+  // There are far fewer riddles than days since the epoch, so wrap back to the
+  // start of the list instead of indexing off the end of the array.
+  return day_number % riddles.length;
 }
 
 function getGuesses() {
   var guesses =  localStorage.getItem('guesses')
-  return guesses == null ? []: JSON.parse(guesses);  
+  return guesses == null ? []: JSON.parse(guesses);
 }
 
 function getNoOfGuesses() {
