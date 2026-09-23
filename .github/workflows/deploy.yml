@@ -1,0 +1,96 @@
+name: Deploy to Cloudflare Pages
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROJECT_NAME: riddle
+  PRODUCTION_BRANCH: main
+  CUSTOM_DOMAIN: riddle.peebles.lol
+  ZONE_NAME: peebles.lol
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Test
+        run: npm test
+        env:
+          CI: true
+
+      - name: Build
+        run: npm run build
+        env:
+          CI: true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build
+          path: build
+          retention-days: 7
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    # Fork PRs can't read the Cloudflare secrets, so they only get the build check.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      IS_PRODUCTION: ${{ github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: build
+          path: build
+
+      - name: Ensure Pages project exists
+        run: .github/scripts/cloudflare-pages.sh project
+
+      # Branch names are user-controlled; keep only characters Pages allows in branch aliases.
+      - name: Resolve branch
+        id: branch
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: echo "name=$(tr -c 'A-Za-z0-9-' '-' <<<"$BRANCH" | sed 's/-*$//')" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy
+        id: deploy
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3.15.0
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy build --project-name=${{ env.PROJECT_NAME }} --branch=${{ steps.branch.outputs.name }} --commit-hash=${{ github.sha }}
+
+      - name: Attach custom domain and DNS
+        if: env.IS_PRODUCTION == 'true'
+        run: .github/scripts/cloudflare-pages.sh domain
+
+      - name: Summary
+        run: |
+          {
+            echo "### Deployed to Cloudflare Pages"
+            echo "- Deployment: ${{ steps.deploy.outputs.deployment-url }}"
+            if [[ "$IS_PRODUCTION" == "true" ]]; then echo "- Production: https://$CUSTOM_DOMAIN"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
